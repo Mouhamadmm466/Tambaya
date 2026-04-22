@@ -1,0 +1,22 @@
+version: "3.9"
+
+services:
+  whisper:
+    build: .
+    env_file:
+      - .env
+    ports:
+      - "80:8001"
+    volumes:
+      - model_cache:/root/.cache/huggingface
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped
+
+volumes:
+  model_cache:
