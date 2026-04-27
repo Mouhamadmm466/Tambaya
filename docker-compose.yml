@@ -86,6 +86,21 @@ services:
     networks:
       - namu_network
 
+  ollama:
+    image: ollama/ollama:latest
+    container_name: namu_ollama
+    restart: unless-stopped
+    volumes:
+      - ollama_data:/root/.ollama
+    networks:
+      - namu_network
+    expose:
+      - "11434"
+    deploy:
+      resources:
+        limits:
+          memory: 5g
+
 networks:
   namu_network:
     driver: bridge
@@ -94,3 +109,4 @@ volumes:
   postgres_data:
   prometheus_data:
   grafana_data:
+  ollama_data:

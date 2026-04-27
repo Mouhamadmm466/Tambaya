@@ -9,6 +9,8 @@ os.environ["WEBHOOK_SECRET"] = "test-webhook-token"
 os.environ["AT_CALLBACK_BASE_URL"] = "https://test.namu.example.com"
 os.environ["WHISPER_SERVICE_URL"] = "http://localhost:8001"
 os.environ["WHISPER_API_KEY"] = "test-whisper-key"
+os.environ["OLLAMA_BASE_URL"] = "http://localhost:11434"
+os.environ.setdefault("GEMMA_MODEL_NAME", "gemma4:4b")
 os.environ.setdefault("SECRET_KEY", "test-secret-key-do-not-use-in-prod")
 os.environ.setdefault("DATABASE_URL", "postgresql://namu_user:namu_dev_2026@db:5432/namu_tambaya")
 
@@ -21,6 +23,8 @@ _settings.webhook_secret = "test-webhook-token"
 _settings.at_callback_base_url = "https://test.namu.example.com"
 _settings.whisper_service_url = "http://localhost:8001"
 _settings.whisper_api_key = "test-whisper-key"
+_settings.ollama_base_url = "http://localhost:11434"
+_settings.gemma_model_name = "gemma4:4b"
 
 
 @pytest.fixture

@@ -54,16 +54,14 @@ def build_fallback_xml() -> str:
     return '<?xml version="1.0" encoding="UTF-8"?>' + tostring(root, encoding="unicode")
 
 
-def build_transcription_response_xml(transcript: str) -> str:
-    """AT XML returned after successful transcription: echo the transcript to the caller.
+def build_agent_response_xml(response_text: str) -> str:
+    """AT XML wrapping an agent's Hausa answer.
 
-    Phase 4: replace <Say> with the AI agent's answer.
     Phase 5: replace <Say> with <Play url="...ElevenLabs audio..."/>.
-    Phase 7: replace English text with natural Niger Hausa.
     """
     root = Element("Response")
     say = SubElement(root, "Say", voice="woman")
-    say.text = f"You said: {transcript}. Thank you. Goodbye."
+    say.text = response_text
     return '<?xml version="1.0" encoding="UTF-8"?>' + tostring(root, encoding="unicode")
 
 

@@ -4,10 +4,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from agents.router_agent import RouteResult
+from database.models import CallCategory
 from services.telephony_service import (
+    build_agent_response_xml,
     build_fallback_xml,
     build_poor_quality_xml,
-    build_transcription_response_xml,
     build_voice_response_xml,
     download_recording,
     hash_phone_number,
@@ -77,8 +79,8 @@ def test_voice_xml_record_parameters():
 
 def test_voice_xml_is_parseable():
     xml = build_voice_response_xml(VALID_TOKEN)
-    body = xml.split("?>", 1)[-1]  # strip XML declaration
-    ET.fromstring(body)             # raises on invalid XML
+    body = xml.split("?>", 1)[-1]
+    ET.fromstring(body)
 
 
 # ---------------------------------------------------------------------------
@@ -102,17 +104,17 @@ def test_fallback_xml_is_parseable():
 
 
 # ---------------------------------------------------------------------------
-# build_transcription_response_xml — pure unit tests
+# build_agent_response_xml — pure unit tests
 # ---------------------------------------------------------------------------
 
-def test_transcription_xml_contains_transcript():
-    xml = build_transcription_response_xml("Me ne?")
-    assert "Me ne?" in xml
+def test_agent_response_xml_contains_text():
+    xml = build_agent_response_xml("An karbi tambayarku kan lafiya.")
+    assert "An karbi tambayarku kan lafiya." in xml
     assert "<Say" in xml
 
 
-def test_transcription_xml_is_parseable():
-    xml = build_transcription_response_xml("Me ne?")
+def test_agent_response_xml_is_parseable():
+    xml = build_agent_response_xml("An karbi tambayarku.")
     body = xml.split("?>", 1)[-1]
     ET.fromstring(body)
 
@@ -201,9 +203,7 @@ async def test_voice_webhook_logs_call_to_db(client):
 
 
 async def test_voice_webhook_db_error_caller_still_gets_greeting(client):
-    """DB failure is caught and logged — the caller still receives the greeting XML.
-    The call must never be dropped due to a logging failure.
-    """
+    """DB failure is caught and logged — the caller still receives the greeting XML."""
     with patch("routers.telephony.AsyncSessionLocal") as mock_sl:
         mock_sl.side_effect = Exception("DB connection refused")
 
@@ -234,12 +234,12 @@ async def test_voice_webhook_non_initiated_state_returns_xml(client):
 
 
 # ---------------------------------------------------------------------------
-# recording_callback router — integration tests (httpx + whisper mocked)
+# recording_callback router — integration tests
 # ---------------------------------------------------------------------------
 
-def _good_transcription_result() -> TranscriptionResult:
+def _good_transcription() -> TranscriptionResult:
     return TranscriptionResult(
-        text="Me ne?",
+        text="Ciwon kai yana damuna, me zan yi?",
         language="ha",
         avg_log_prob=-0.5,
         no_speech_prob=0.1,
@@ -248,7 +248,7 @@ def _good_transcription_result() -> TranscriptionResult:
     )
 
 
-def _poor_transcription_result() -> TranscriptionResult:
+def _poor_transcription() -> TranscriptionResult:
     return TranscriptionResult(
         text="",
         language="ha",
@@ -257,6 +257,10 @@ def _poor_transcription_result() -> TranscriptionResult:
         duration_ms=400,
         succeeded=False,
     )
+
+
+def _health_route() -> RouteResult:
+    return RouteResult(category=CallCategory.health, raw_response='{"category": "health"}')
 
 
 def _mock_httpx_download(content: bytes = b"fake-wav-audio-data"):
@@ -268,6 +272,9 @@ def _mock_httpx_download(content: bytes = b"fake-wav-audio-data"):
     mock_http.__aenter__ = AsyncMock(return_value=mock_http)
     mock_http.__aexit__ = AsyncMock(return_value=False)
     return mock_http
+
+
+_STUB_ANSWER = "An karbi tambayarku kan lafiya."
 
 
 async def test_recording_callback_no_token_returns_403(client):
@@ -286,12 +293,16 @@ async def test_recording_callback_wrong_token_returns_403(client):
     assert resp.status_code == 403
 
 
-async def test_recording_callback_downloads_audio_and_transcribes(client):
+async def test_recording_callback_full_pipeline_returns_xml(client):
     mock_http = _mock_httpx_download()
 
     with patch("httpx.AsyncClient", return_value=mock_http), \
          patch("routers.telephony.whisper_service.transcribe",
-               new=AsyncMock(return_value=_good_transcription_result())):
+               new=AsyncMock(return_value=_good_transcription())), \
+         patch("routers.telephony.router_agent.classify",
+               new=AsyncMock(return_value=_health_route())), \
+         patch("routers.telephony.health_agent.answer",
+               new=AsyncMock(return_value=_STUB_ANSWER)):
         resp = await client.post(
             f"/api/telephony/recording?token={VALID_TOKEN}",
             data={
@@ -304,18 +315,20 @@ async def test_recording_callback_downloads_audio_and_transcribes(client):
 
     assert resp.status_code == 200
     assert "application/xml" in resp.headers["content-type"]
-    mock_http.get.assert_awaited_once_with(
-        "https://voice.africastalking.com/recordings/test.wav"
-    )
+    assert _STUB_ANSWER in resp.text
 
 
-async def test_recording_callback_good_transcription_returns_transcript_xml(client):
+async def test_recording_callback_downloads_audio(client):
     mock_http = _mock_httpx_download()
 
     with patch("httpx.AsyncClient", return_value=mock_http), \
          patch("routers.telephony.whisper_service.transcribe",
-               new=AsyncMock(return_value=_good_transcription_result())):
-        resp = await client.post(
+               new=AsyncMock(return_value=_good_transcription())), \
+         patch("routers.telephony.router_agent.classify",
+               new=AsyncMock(return_value=_health_route())), \
+         patch("routers.telephony.health_agent.answer",
+               new=AsyncMock(return_value=_STUB_ANSWER)):
+        await client.post(
             f"/api/telephony/recording?token={VALID_TOKEN}",
             data={
                 "sessionId": "ATVId_test123",
@@ -323,15 +336,17 @@ async def test_recording_callback_good_transcription_returns_transcript_xml(clie
             },
         )
 
-    assert "Me ne?" in resp.text
+    mock_http.get.assert_awaited_once_with(
+        "https://voice.africastalking.com/recordings/test.wav"
+    )
 
 
-async def test_recording_callback_poor_quality_returns_poor_quality_xml(client):
+async def test_recording_callback_poor_transcription_returns_poor_quality_xml(client):
     mock_http = _mock_httpx_download()
 
     with patch("httpx.AsyncClient", return_value=mock_http), \
          patch("routers.telephony.whisper_service.transcribe",
-               new=AsyncMock(return_value=_poor_transcription_result())):
+               new=AsyncMock(return_value=_poor_transcription())):
         resp = await client.post(
             f"/api/telephony/recording?token={VALID_TOKEN}",
             data={
@@ -345,8 +360,57 @@ async def test_recording_callback_poor_quality_returns_poor_quality_xml(client):
     assert "clearly" in resp.text.lower()
 
 
+async def test_recording_callback_router_failure_still_returns_xml(client):
+    """Router exception is caught — falls back to general agent, caller still gets XML."""
+    mock_http = _mock_httpx_download()
+
+    with patch("httpx.AsyncClient", return_value=mock_http), \
+         patch("routers.telephony.whisper_service.transcribe",
+               new=AsyncMock(return_value=_good_transcription())), \
+         patch("routers.telephony.router_agent.classify",
+               new=AsyncMock(side_effect=Exception("ollama down"))), \
+         patch("routers.telephony.general_agent.answer",
+               new=AsyncMock(return_value="An karbi tambayarku.")):
+        resp = await client.post(
+            f"/api/telephony/recording?token={VALID_TOKEN}",
+            data={
+                "sessionId": "ATVId_test123",
+                "recordingUrl": "https://voice.africastalking.com/recordings/test.wav",
+            },
+        )
+
+    assert resp.status_code == 200
+    assert "application/xml" in resp.headers["content-type"]
+
+
+async def test_recording_callback_updates_db_with_category(client):
+    mock_http = _mock_httpx_download()
+    mock_session = _mock_db_session()
+
+    with patch("httpx.AsyncClient", return_value=mock_http), \
+         patch("routers.telephony.whisper_service.transcribe",
+               new=AsyncMock(return_value=_good_transcription())), \
+         patch("routers.telephony.router_agent.classify",
+               new=AsyncMock(return_value=_health_route())), \
+         patch("routers.telephony.health_agent.answer",
+               new=AsyncMock(return_value=_STUB_ANSWER)), \
+         patch("routers.telephony.AsyncSessionLocal") as mock_sl:
+        mock_sl.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_sl.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        await client.post(
+            f"/api/telephony/recording?token={VALID_TOKEN}",
+            data={
+                "sessionId": "ATVId_test123",
+                "recordingUrl": "https://voice.africastalking.com/recordings/test.wav",
+            },
+        )
+
+    mock_session.execute.assert_awaited_once()
+    mock_session.commit.assert_awaited_once()
+
+
 async def test_recording_callback_transcription_exception_returns_fallback_xml(client):
-    """Whisper service error is caught — caller still gets a response."""
     mock_http = _mock_httpx_download()
 
     with patch("httpx.AsyncClient", return_value=mock_http), \
@@ -365,31 +429,7 @@ async def test_recording_callback_transcription_exception_returns_fallback_xml(c
     assert "unavailable" in resp.text.lower()
 
 
-async def test_recording_callback_updates_db_with_transcription_metadata(client):
-    mock_http = _mock_httpx_download()
-    mock_session = _mock_db_session()
-
-    with patch("httpx.AsyncClient", return_value=mock_http), \
-         patch("routers.telephony.whisper_service.transcribe",
-               new=AsyncMock(return_value=_good_transcription_result())), \
-         patch("routers.telephony.AsyncSessionLocal") as mock_sl:
-        mock_sl.return_value.__aenter__ = AsyncMock(return_value=mock_session)
-        mock_sl.return_value.__aexit__ = AsyncMock(return_value=False)
-
-        await client.post(
-            f"/api/telephony/recording?token={VALID_TOKEN}",
-            data={
-                "sessionId": "ATVId_test123",
-                "recordingUrl": "https://voice.africastalking.com/recordings/test.wav",
-            },
-        )
-
-    mock_session.execute.assert_awaited_once()
-    mock_session.commit.assert_awaited_once()
-
-
 async def test_recording_callback_no_recording_url_returns_200(client):
-    """AT can call the recording endpoint without a recordingUrl in edge cases."""
     resp = await client.post(
         f"/api/telephony/recording?token={VALID_TOKEN}",
         data={"sessionId": "ATVId_test123"},
@@ -398,7 +438,6 @@ async def test_recording_callback_no_recording_url_returns_200(client):
 
 
 async def test_recording_callback_download_failure_returns_fallback_xml(client):
-    """Network failure on recording download must not crash the endpoint."""
     mock_http = AsyncMock()
     mock_http.get = AsyncMock(side_effect=Exception("network error"))
     mock_http.__aenter__ = AsyncMock(return_value=mock_http)

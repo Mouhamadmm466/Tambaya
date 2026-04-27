@@ -1,5 +1,21 @@
+import logging
+
+logger = logging.getLogger(__name__)
+
+
 class EducationAgent:
-    """Phase 6: answers education and literacy questions relevant to Niger."""
+    """Answers education and literacy questions relevant to Niger.
+
+    Phase 4: returns a Hausa acknowledgment placeholder.
+    Phase 6: replaces answer() with ChromaDB RAG + Ollama generation.
+    """
 
     async def answer(self, question: str) -> str:
-        raise NotImplementedError
+        # Phase 4 stub — replaced in Phase 6
+        return (
+            "An karbi tambayarku kan ilimi. "
+            "Za mu ba ku amsar da ta dace da makarantun Niger nan take."
+        )
+
+
+education_agent = EducationAgent()

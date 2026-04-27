@@ -5,13 +5,18 @@ from typing import Optional
 from fastapi import APIRouter, Form, Query, Response
 from sqlalchemy import update
 
+from agents.agriculture_agent import agriculture_agent
+from agents.education_agent import education_agent
+from agents.general_agent import general_agent
+from agents.health_agent import health_agent
+from agents.router_agent import router_agent
 from config import settings
 from database.connection import AsyncSessionLocal
-from database.models import CallLog, CallOutcome
+from database.models import CallCategory, CallLog, CallOutcome
 from services.telephony_service import (
+    build_agent_response_xml,
     build_fallback_xml,
     build_poor_quality_xml,
-    build_transcription_response_xml,
     build_voice_response_xml,
     download_recording,
     hash_phone_number,
@@ -22,6 +27,16 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/telephony", tags=["telephony"])
 
 _XML = "application/xml"
+
+# Route each classified category to its agent.
+# unclear maps to general — NAMU_CONTEXT.md: "Router confidence low → General Knowledge agent"
+_AGENT_MAP = {
+    CallCategory.health: health_agent,
+    CallCategory.agriculture: agriculture_agent,
+    CallCategory.education: education_agent,
+    CallCategory.general: general_agent,
+    CallCategory.unclear: general_agent,
+}
 
 
 def _token_valid(token: str) -> bool:
@@ -81,8 +96,8 @@ async def recording_callback(
 ) -> Response:
     """Africa's Talking Recording Callback URL.
 
-    AT POSTs here when the caller's recording is ready, then waits for XML
-    to know what to do next. We transcribe the audio and echo back the transcript.
+    Pipeline: download → transcribe → route → agent answer → XML response.
+    AT waits for our XML to control the next call step.
     All exceptions return fallback XML — the call must never be silently dropped.
     """
     if not _token_valid(token):
@@ -92,47 +107,70 @@ async def recording_callback(
         return Response(status_code=200)
 
     try:
+        # Step 1: download audio
         audio_bytes = await download_recording(recording_url)
         logger.info(
             "Recording received: session=%s size=%d bytes duration=%ss",
-            session_id,
-            len(audio_bytes),
-            duration_seconds,
+            session_id, len(audio_bytes), duration_seconds,
         )
 
-        result = await whisper_service.transcribe(audio_bytes)
+        # Step 2: transcribe
+        transcription = await whisper_service.transcribe(audio_bytes)
         logger.info(
-            "Transcription done: session=%s succeeded=%s duration_ms=%d text=%r",
-            session_id,
-            result.succeeded,
-            result.duration_ms,
-            result.text[:60] if result.text else "",
+            "Transcription: session=%s succeeded=%s duration_ms=%d text=%r",
+            session_id, transcription.succeeded, transcription.duration_ms,
+            transcription.text[:60] if transcription.text else "",
         )
 
+        # Step 3: route (only when transcription produced usable text)
+        category: Optional[CallCategory] = None
+        answer_text: Optional[str] = None
+
+        if transcription.succeeded and transcription.text:
+            try:
+                route = await router_agent.classify(transcription.text)
+                category = route.category
+                logger.info("Routing: session=%s category=%s", session_id, category.value)
+            except Exception:
+                logger.exception("Router failed for session %s — using general", session_id)
+                category = CallCategory.general
+
+            # Step 4: get agent answer
+            try:
+                agent = _AGENT_MAP[category]
+                answer_text = await agent.answer(transcription.text)
+            except Exception:
+                logger.exception("Agent failed for session %s — using fallback", session_id)
+
+        # Step 5: persist transcription + category to DB
         if session_id:
             try:
+                update_values: dict = {
+                    "transcription_succeeded": transcription.succeeded,
+                    "transcription_time_ms": transcription.duration_ms,
+                    "no_speech_prob": transcription.no_speech_prob,
+                    "avg_log_prob": transcription.avg_log_prob,
+                    "outcome": CallOutcome.success if transcription.succeeded else CallOutcome.fallback,
+                }
+                if category is not None:
+                    update_values["category"] = category
                 async with AsyncSessionLocal() as db:
                     await db.execute(
                         update(CallLog)
                         .where(CallLog.call_id == session_id)
-                        .values(
-                            transcription_succeeded=result.succeeded,
-                            transcription_time_ms=result.duration_ms,
-                            no_speech_prob=result.no_speech_prob,
-                            avg_log_prob=result.avg_log_prob,
-                            outcome=CallOutcome.success if result.succeeded else CallOutcome.fallback,
-                        )
+                        .values(**update_values)
                     )
                     await db.commit()
             except Exception:
-                logger.exception("DB update failed for transcription session %s", session_id)
+                logger.exception("DB update failed for session %s", session_id)
 
-        if result.succeeded and result.text:
-            xml = build_transcription_response_xml(result.text)
+        # Step 6: return AT XML
+        if answer_text:
+            return Response(content=build_agent_response_xml(answer_text), media_type=_XML)
+        elif not transcription.succeeded:
+            return Response(content=build_poor_quality_xml(), media_type=_XML)
         else:
-            xml = build_poor_quality_xml()
-
-        return Response(content=xml, media_type=_XML)
+            return Response(content=build_fallback_xml(), media_type=_XML)
 
     except Exception:
         logger.exception("Failed to process recording for session %s", session_id)

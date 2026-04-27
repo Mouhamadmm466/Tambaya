@@ -8,6 +8,7 @@ from config import settings
 from database.connection import engine
 from database.models import Base
 from routers import health_check, telephony, transcription
+from routers import agents as agents_router
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +27,10 @@ async def lifespan(app: FastAPI):
             "WHISPER_SERVICE_URL is not set — transcription will fail. "
             "Set it in .env to the RunPod whisper service URL."
         )
+    if not settings.ollama_base_url:
+        logger.warning(
+            "OLLAMA_BASE_URL is not set — routing will fall back to 'general' for every call."
+        )
     yield
     await engine.dispose()
 
@@ -42,4 +47,5 @@ Instrumentator().instrument(app).expose(app, endpoint="/metrics", include_in_sch
 app.include_router(health_check.router)
 app.include_router(telephony.router)
 app.include_router(transcription.router)
-# Phase 4: app.include_router(agents.router)
+app.include_router(agents_router.router)
+# Phase 5: app.include_router(tts.router)

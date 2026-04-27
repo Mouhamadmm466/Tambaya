@@ -154,8 +154,11 @@ namu-tambaya/
 | 0 | Preparation — accounts, Whisper testing, voice recording | ✅ Complete |
 | 1 | Infrastructure — Docker, FastAPI, PostgreSQL, Nginx | 🔄 In Progress |
 | 2 | Telephony — Africa's Talking integration | ⬜ Not Started |
-| 3 | Speech to Text — faster-whisper self-hosted | ⬜ Not Started |
-| 4 | Router Agent — Gemma 4 via Ollama | ⬜ Not Started |
+| 3 | Speech to Text — faster-whisper self-hosted | ✅ Complete |
+| 4 | Router Agent — Gemma 4 via Ollama | 🔄 In Progress |
+
+CURRENT PHASE: 4
+CURRENT SESSION GOAL: Build the Router Agent using Gemma 4 via Ollama to classify Hausa questions
 | 5 | Agriculture Agent + ElevenLabs + Full call loop | ⬜ Not Started |
 | 6 | Health, Education, General Knowledge agents | ⬜ Not Started |
 | 7 | Cultural layer and voice personality | ⬜ Not Started |
