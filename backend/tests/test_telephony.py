@@ -9,6 +9,7 @@ from database.models import CallCategory
 from services.telephony_service import (
     build_agent_response_xml,
     build_fallback_xml,
+    build_play_response_xml,
     build_poor_quality_xml,
     build_voice_response_xml,
     download_recording,
@@ -115,6 +116,27 @@ def test_agent_response_xml_contains_text():
 
 def test_agent_response_xml_is_parseable():
     xml = build_agent_response_xml("An karbi tambayarku.")
+    body = xml.split("?>", 1)[-1]
+    ET.fromstring(body)
+
+
+# ---------------------------------------------------------------------------
+# build_play_response_xml — pure unit tests
+# ---------------------------------------------------------------------------
+
+def test_play_response_xml_contains_play_tag():
+    xml = build_play_response_xml("https://example.com/audio/test.mp3")
+    assert "<Play" in xml
+
+
+def test_play_response_xml_contains_url():
+    url = "https://example.com/audio/abc123.mp3"
+    xml = build_play_response_xml(url)
+    assert url in xml
+
+
+def test_play_response_xml_is_parseable():
+    xml = build_play_response_xml("https://example.com/audio/test.mp3")
     body = xml.split("?>", 1)[-1]
     ET.fromstring(body)
 
@@ -455,3 +477,74 @@ async def test_recording_callback_download_failure_returns_fallback_xml(client):
     assert resp.status_code == 200
     assert "application/xml" in resp.headers["content-type"]
     assert "unavailable" in resp.text.lower()
+
+
+# ---------------------------------------------------------------------------
+# ElevenLabs TTS path — recording_callback integration tests
+# ---------------------------------------------------------------------------
+
+async def test_recording_callback_returns_play_xml_when_elevenlabs_works(client):
+    """When ElevenLabs succeeds the response contains a <Play> tag, not <Say>."""
+    from config import settings as s
+    s.elevenlabs_api_key = "test-key"
+    s.elevenlabs_voice_id = "test-voice"
+
+    mock_http = _mock_httpx_download()
+
+    with patch("httpx.AsyncClient", return_value=mock_http), \
+         patch("routers.telephony.whisper_service.transcribe",
+               new=AsyncMock(return_value=_good_transcription())), \
+         patch("routers.telephony.router_agent.classify",
+               new=AsyncMock(return_value=_health_route())), \
+         patch("routers.telephony.health_agent.answer",
+               new=AsyncMock(return_value=_STUB_ANSWER)), \
+         patch("routers.telephony.elevenlabs_service.synthesize",
+               new=AsyncMock(return_value=b"fake-mp3")):
+        resp = await client.post(
+            f"/api/telephony/recording?token={VALID_TOKEN}",
+            data={
+                "sessionId": "ATVId_test123",
+                "recordingUrl": "https://voice.africastalking.com/recordings/test.wav",
+            },
+        )
+
+    s.elevenlabs_api_key = ""
+    s.elevenlabs_voice_id = ""
+
+    assert resp.status_code == 200
+    assert "application/xml" in resp.headers["content-type"]
+    assert "<Play" in resp.text
+
+
+async def test_recording_callback_falls_back_to_say_when_elevenlabs_fails(client):
+    """ElevenLabs failure is caught — caller still gets <Say> with the answer text."""
+    from config import settings as s
+    s.elevenlabs_api_key = "test-key"
+    s.elevenlabs_voice_id = "test-voice"
+
+    mock_http = _mock_httpx_download()
+
+    with patch("httpx.AsyncClient", return_value=mock_http), \
+         patch("routers.telephony.whisper_service.transcribe",
+               new=AsyncMock(return_value=_good_transcription())), \
+         patch("routers.telephony.router_agent.classify",
+               new=AsyncMock(return_value=_health_route())), \
+         patch("routers.telephony.health_agent.answer",
+               new=AsyncMock(return_value=_STUB_ANSWER)), \
+         patch("routers.telephony.elevenlabs_service.synthesize",
+               new=AsyncMock(side_effect=Exception("ElevenLabs API down"))):
+        resp = await client.post(
+            f"/api/telephony/recording?token={VALID_TOKEN}",
+            data={
+                "sessionId": "ATVId_test123",
+                "recordingUrl": "https://voice.africastalking.com/recordings/test.wav",
+            },
+        )
+
+    s.elevenlabs_api_key = ""
+    s.elevenlabs_voice_id = ""
+
+    assert resp.status_code == 200
+    assert "application/xml" in resp.headers["content-type"]
+    assert "<Say" in resp.text
+    assert _STUB_ANSWER in resp.text

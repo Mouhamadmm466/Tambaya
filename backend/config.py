@@ -23,6 +23,14 @@ class Settings(BaseSettings):
     # ElevenLabs (Phase 5)
     elevenlabs_api_key: str = ""
     elevenlabs_voice_id: str = ""
+    elevenlabs_model: str = "eleven_multilingual_v2"
+
+    # ChromaDB (Phase 5)
+    chroma_host: str = "chromadb"
+    chroma_port: int = 8000
+
+    # Audio temp files — served via StaticFiles at /audio (Phase 5)
+    audio_temp_dir: str = "/app/audio_temp"
 
     # Ollama / Gemma (Phase 4)
     ollama_base_url: str = "http://ollama:11434"

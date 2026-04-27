@@ -20,10 +20,8 @@ def _mock_httpx_client(response_payload: dict, status_code: int = 200):
 
 
 _GOOD_RESPONSE = {
-    "message": {
-        "role": "assistant",
-        "content": '{"category": "health"}',
-    }
+    "response": '{"category": "health"}',
+    "done": True,
 }
 
 
@@ -39,7 +37,7 @@ async def test_chat_posts_to_correct_url():
         await svc.chat("system", "user message")
 
     args, _ = mock_client.post.call_args
-    assert args[0] == "http://localhost:11434/api/chat"
+    assert args[0] == "http://localhost:11434/api/generate"
 
 
 async def test_chat_sends_correct_model():
@@ -50,7 +48,7 @@ async def test_chat_sends_correct_model():
         await svc.chat("system", "user message")
 
     _, kwargs = mock_client.post.call_args
-    assert kwargs["json"]["model"] == "gemma4:4b"
+    assert kwargs["json"]["model"] == "gemma3:1b"
 
 
 async def test_chat_sends_stream_false():
@@ -75,7 +73,18 @@ async def test_chat_sends_temperature_zero():
     assert kwargs["json"]["options"]["temperature"] == 0
 
 
-async def test_chat_sends_system_and_user_messages():
+async def test_chat_sends_json_format():
+    svc = OllamaService()
+    mock_client = _mock_httpx_client(_GOOD_RESPONSE)
+
+    with patch("httpx.AsyncClient", return_value=mock_client):
+        await svc.chat("system", "user message")
+
+    _, kwargs = mock_client.post.call_args
+    assert kwargs["json"]["format"] == "json"
+
+
+async def test_chat_sends_system_and_prompt_fields():
     svc = OllamaService()
     mock_client = _mock_httpx_client(_GOOD_RESPONSE)
 
@@ -83,12 +92,11 @@ async def test_chat_sends_system_and_user_messages():
         await svc.chat("my system prompt", "my user question")
 
     _, kwargs = mock_client.post.call_args
-    messages = kwargs["json"]["messages"]
-    assert messages[0] == {"role": "system", "content": "my system prompt"}
-    assert messages[1] == {"role": "user", "content": "my user question"}
+    assert kwargs["json"]["system"] == "my system prompt"
+    assert kwargs["json"]["prompt"] == "my user question"
 
 
-async def test_chat_returns_message_content():
+async def test_chat_returns_response_field():
     svc = OllamaService()
     mock_client = _mock_httpx_client(_GOOD_RESPONSE)
 

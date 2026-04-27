@@ -155,11 +155,12 @@ namu-tambaya/
 | 1 | Infrastructure — Docker, FastAPI, PostgreSQL, Nginx | 🔄 In Progress |
 | 2 | Telephony — Africa's Talking integration | ⬜ Not Started |
 | 3 | Speech to Text — faster-whisper self-hosted | ✅ Complete |
-| 4 | Router Agent — Gemma 4 via Ollama | 🔄 In Progress |
 
-CURRENT PHASE: 4
-CURRENT SESSION GOAL: Build the Router Agent using Gemma 4 via Ollama to classify Hausa questions
-| 5 | Agriculture Agent + ElevenLabs + Full call loop | ⬜ Not Started |
+| 4 | Router Agent — Gemma 4 via Ollama | ✅ Complete |
+| 5 | Agriculture Agent + ElevenLabs + Full call loop | 🔄 In Progress |
+
+CURRENT PHASE: 5
+CURRENT SESSION GOAL: Build Agriculture Agent with RAG, integrate ElevenLabs, complete full call loop end to end
 | 6 | Health, Education, General Knowledge agents | ⬜ Not Started |
 | 7 | Cultural layer and voice personality | ⬜ Not Started |
 | 8 | Monitoring, security audit, pilot launch | ⬜ Not Started |

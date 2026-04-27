@@ -65,6 +65,17 @@ def build_agent_response_xml(response_text: str) -> str:
     return '<?xml version="1.0" encoding="UTF-8"?>' + tostring(root, encoding="unicode")
 
 
+def build_play_response_xml(audio_url: str) -> str:
+    """AT XML that plays a pre-generated audio file (ElevenLabs TTS).
+
+    AT fetches the URL and plays the MP3 to the caller.
+    Phase 7: this becomes the primary response path for all agents.
+    """
+    root = Element("Response")
+    SubElement(root, "Play", url=audio_url)
+    return '<?xml version="1.0" encoding="UTF-8"?>' + tostring(root, encoding="unicode")
+
+
 def build_poor_quality_xml() -> str:
     """AT XML returned when transcription quality falls below usable thresholds.
 

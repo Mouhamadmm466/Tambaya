@@ -86,6 +86,19 @@ services:
     networks:
       - namu_network
 
+  chromadb:
+    image: chromadb/chroma:latest
+    container_name: namu_chromadb
+    restart: unless-stopped
+    volumes:
+      - chroma_data:/chroma/chroma
+    networks:
+      - namu_network
+    expose:
+      - "8000"
+    environment:
+      - ANONYMIZED_TELEMETRY=False
+
   ollama:
     image: ollama/ollama:latest
     container_name: namu_ollama
@@ -110,3 +123,4 @@ volumes:
   prometheus_data:
   grafana_data:
   ollama_data:
+  chroma_data:

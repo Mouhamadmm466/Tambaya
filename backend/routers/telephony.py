@@ -1,5 +1,9 @@
+import asyncio
 import hmac
 import logging
+import os
+import uuid
+from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, Form, Query, Response
@@ -13,9 +17,11 @@ from agents.router_agent import router_agent
 from config import settings
 from database.connection import AsyncSessionLocal
 from database.models import CallCategory, CallLog, CallOutcome
+from services.elevenlabs_service import elevenlabs_service
 from services.telephony_service import (
     build_agent_response_xml,
     build_fallback_xml,
+    build_play_response_xml,
     build_poor_quality_xml,
     build_voice_response_xml,
     download_recording,
@@ -28,7 +34,6 @@ router = APIRouter(prefix="/api/telephony", tags=["telephony"])
 
 _XML = "application/xml"
 
-# Route each classified category to its agent.
 # unclear maps to general — NAMU_CONTEXT.md: "Router confidence low → General Knowledge agent"
 _AGENT_MAP = {
     CallCategory.health: health_agent,
@@ -45,6 +50,43 @@ def _token_valid(token: str) -> bool:
         logger.warning("WEBHOOK_SECRET is not set — all webhook requests are accepted")
         return True
     return hmac.compare_digest(token, settings.webhook_secret)
+
+
+async def _to_voice_xml(text: str, session_id: Optional[str]) -> str:
+    """Convert answer text to AT XML.
+
+    Tries ElevenLabs TTS → <Play url="..."/> if API key and voice ID are set.
+    Falls back to <Say> when ElevenLabs is unavailable — the caller always hears
+    something, even if TTS quality degrades.
+    """
+    if not (settings.elevenlabs_api_key and settings.elevenlabs_voice_id):
+        return build_agent_response_xml(text)
+
+    try:
+        audio_bytes = await elevenlabs_service.synthesize(text)
+        filename = f"{uuid.uuid4().hex}.mp3"
+        filepath = Path(settings.audio_temp_dir) / filename
+        filepath.write_bytes(audio_bytes)
+        audio_url = (
+            f"{settings.at_callback_base_url.rstrip('/')}/audio/{filename}"
+        )
+        # Schedule file deletion after 120s — AT downloads within seconds of the XML response.
+        # call_later schedules a sync callback without creating a pending coroutine.
+        asyncio.get_event_loop().call_later(
+            120,
+            lambda p=str(filepath): os.unlink(p) if os.path.exists(p) else None,
+        )
+        logger.info(
+            "TTS audio saved: session=%s file=%s url=%s",
+            session_id, filename, audio_url,
+        )
+        return build_play_response_xml(audio_url)
+    except Exception:
+        logger.exception(
+            "ElevenLabs synthesis failed for session %s — using <Say> fallback",
+            session_id,
+        )
+        return build_agent_response_xml(text)
 
 
 @router.post("/voice")
@@ -75,7 +117,6 @@ async def voice_webhook(
                     ))
                     await db.commit()
             except Exception:
-                # Non-critical — the caller still gets the greeting even if logging fails
                 logger.exception("DB write failed for session %s", session_id)
 
         xml = build_voice_response_xml(token)
@@ -96,8 +137,8 @@ async def recording_callback(
 ) -> Response:
     """Africa's Talking Recording Callback URL.
 
-    Pipeline: download → transcribe → route → agent answer → XML response.
-    AT waits for our XML to control the next call step.
+    Full pipeline: download → transcribe → route → RAG answer → ElevenLabs TTS
+    → <Play> XML. AT waits for our XML to control the next call step.
     All exceptions return fallback XML — the call must never be silently dropped.
     """
     if not _token_valid(token):
@@ -122,27 +163,38 @@ async def recording_callback(
             transcription.text[:60] if transcription.text else "",
         )
 
-        # Step 3: route (only when transcription produced usable text)
         category: Optional[CallCategory] = None
         answer_text: Optional[str] = None
 
         if transcription.succeeded and transcription.text:
+            # Step 3: route
             try:
                 route = await router_agent.classify(transcription.text)
                 category = route.category
-                logger.info("Routing: session=%s category=%s", session_id, category.value)
+                logger.info(
+                    "Routing: session=%s category=%s", session_id, category.value
+                )
             except Exception:
-                logger.exception("Router failed for session %s — using general", session_id)
+                logger.exception(
+                    "Router failed for session %s — using general", session_id
+                )
                 category = CallCategory.general
 
-            # Step 4: get agent answer
+            # Step 4: agent answer (RAG for agriculture, stubs for others)
             try:
                 agent = _AGENT_MAP[category]
                 answer_text = await agent.answer(transcription.text)
+                logger.info(
+                    "Agent answer: session=%s category=%s text=%r",
+                    session_id, category.value, answer_text[:60],
+                )
             except Exception:
-                logger.exception("Agent failed for session %s — using fallback", session_id)
+                logger.exception(
+                    "Agent failed for session %s — answer_text will be None",
+                    session_id,
+                )
 
-        # Step 5: persist transcription + category to DB
+        # Step 5: persist to DB
         if session_id:
             try:
                 update_values: dict = {
@@ -150,7 +202,10 @@ async def recording_callback(
                     "transcription_time_ms": transcription.duration_ms,
                     "no_speech_prob": transcription.no_speech_prob,
                     "avg_log_prob": transcription.avg_log_prob,
-                    "outcome": CallOutcome.success if transcription.succeeded else CallOutcome.fallback,
+                    "outcome": (
+                        CallOutcome.success if transcription.succeeded
+                        else CallOutcome.fallback
+                    ),
                 }
                 if category is not None:
                     update_values["category"] = category
@@ -164,13 +219,15 @@ async def recording_callback(
             except Exception:
                 logger.exception("DB update failed for session %s", session_id)
 
-        # Step 6: return AT XML
+        # Step 6: TTS → XML
         if answer_text:
-            return Response(content=build_agent_response_xml(answer_text), media_type=_XML)
+            xml = await _to_voice_xml(answer_text, session_id)
         elif not transcription.succeeded:
-            return Response(content=build_poor_quality_xml(), media_type=_XML)
+            xml = build_poor_quality_xml()
         else:
-            return Response(content=build_fallback_xml(), media_type=_XML)
+            xml = build_fallback_xml()
+
+        return Response(content=xml, media_type=_XML)
 
     except Exception:
         logger.exception("Failed to process recording for session %s", session_id)
