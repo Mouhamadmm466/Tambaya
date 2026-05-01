@@ -17,10 +17,8 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Create tables and required directories before accepting requests
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-    os.makedirs(settings.audio_temp_dir, exist_ok=True)
 
     if not settings.at_callback_base_url:
         logger.warning(
@@ -51,6 +49,10 @@ app = FastAPI(
 )
 
 Instrumentator().instrument(app).expose(app, endpoint="/metrics", include_in_schema=False)
+
+# StaticFiles requires the directory to exist at mount time (module import),
+# before lifespan runs — create it here unconditionally.
+os.makedirs(settings.audio_temp_dir, exist_ok=True)
 
 # Serve generated TTS audio files so AT can fetch them via <Play url="..."/>
 app.mount(

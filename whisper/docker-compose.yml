@@ -18,5 +18,31 @@ services:
               capabilities: [gpu]
     restart: unless-stopped
 
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    environment:
+      # Bind to all interfaces so Docker's port mapping is reachable from the host.
+      # Without this Ollama only listens on 127.0.0.1 inside the container and
+      # ngrok (running on the host) cannot forward traffic to it.
+      - OLLAMA_HOST=0.0.0.0
+      # Keep the loaded model in VRAM indefinitely — avoids a cold-load penalty
+      # on every call. RTX 4090 has 24GB; Whisper + Gemma 3 4B use ~7GB combined.
+      - OLLAMA_KEEP_ALIVE=-1
+      # One request at a time — prevents GPU memory contention with Whisper.
+      - OLLAMA_NUM_PARALLEL=1
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped
+
 volumes:
   model_cache:
+  ollama_data:

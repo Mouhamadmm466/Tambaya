@@ -9,8 +9,8 @@ No internet or smartphone required for end users.
 Founded by two native Hausa speakers from Niger.
 
 ## Current Phase
-Phase: 1
-Session Goal: Set up complete Docker infrastructure with FastAPI, PostgreSQL, and Nginx
+Phase: 6
+Session Goal: Build Health, Education, and General Knowledge agents with RAG knowledge bases
 
 ## Non-Negotiables — never violate these
 1. All user audio stays on our infrastructure — no external STT API
